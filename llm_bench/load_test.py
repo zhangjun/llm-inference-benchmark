@@ -38,6 +38,10 @@ prompt = """Generate a Django application with Authentication, JWT, Tests, DB su
 prompt_tokens = 35  # from Llama tokenizer tool (so we don't import it here)
 prompt_random_tokens = 10
 
+def remove_prefix(text: str, prefix: str) -> str:
+    if text.startswith(prefix):
+        return text[len(prefix):]
+    return text
 
 class FixedQPSPacer:
     _instance = None
@@ -319,6 +323,26 @@ class TogetherProvider(OpenAIProvider):
             data = data["output"]
         return super().parse_output_json(data, prompt)
 
+class MassProvider(OpenAIProvider):
+    def get_url(self):
+        # assert not self.parsed_options.chat, "Chat is not supported"
+        # assert not self.parsed_options.stream, "Stream is not supported"
+        return "/sky-chat-saas/api/v4/generate"
+
+    # def parse_output_json(self, data, prompt):
+    #     if not self.parsed_options.stream:
+    #         data = data["resp_data"]
+    #     return super().parse_output_json(data, prompt)
+
+    def parse_output_json(self, data, prompt):
+        resp_data = data["resp_data"]
+        usage = resp_data["usage"] if "usage" in resp_data else None
+        return ChunkMetadata(
+            text=resp_data["reply"],
+            logprob_tokens=None,
+            usage_tokens=usage["completion_tokens"] if usage else None,
+            prompt_usage_tokens=usage.get("prompt_tokens", None) if usage else None,
+        )
 
 class TritonInferProvider(BaseProvider):
     DEFAULT_MODEL_NAME = "ensemble"
@@ -480,6 +504,7 @@ PROVIDER_CLASS_MAP = {
     "triton-infer": TritonInferProvider,
     "triton-generate": TritonGenerateProvider,
     "tgi": TgiProvider,
+    "maas": MassProvider,
 }
 
 
@@ -521,6 +546,8 @@ class LLMUser(HttpUser):
                 self.provider = "openai"
             elif "anyscale" in self.host:
                 self.provider = "anyscale"
+            elif "singularity-ai.com" in self.host:
+                self.provider = "maas"
 
         if (
             self.model is None
@@ -566,9 +593,21 @@ class LLMUser(HttpUser):
     def _on_start(self):
         self.client.headers["Content-Type"] = "application/json"
         if self.environment.parsed_options.api_key:
-            self.client.headers["Authorization"] = (
-                "Bearer " + self.environment.parsed_options.api_key
-            )
+            if self.environment.parsed_options.provider == "maas":
+                import hashlib
+                timestamp = str(int(time.time()))
+                sign_content = self.environment.parsed_options.api_key + self.environment.parsed_options.api_secret + timestamp
+                sign_result = hashlib.md5(sign_content.encode('utf-8')).hexdigest()
+
+                # 设置请求头，请求的数据格式为json
+                self.client.headers["app_key"] = self.environment.parsed_options.api_key
+                self.client.headers["timestamp"] = timestamp
+                self.client.headers["sign"] = sign_result
+                self.client.headers["stream"] = "true" if self.environment.parsed_options.stream else "false"
+            else:
+                self.client.headers["Authorization"] = (
+                    "Bearer " + self.environment.parsed_options.api_key
+                )
         self._guess_provider()
         print(f" Provider {self.provider} using model {self.model} ".center(80, "*"))
         self.provider_formatter = PROVIDER_CLASS_MAP[self.provider](
@@ -653,7 +692,11 @@ class LLMUser(HttpUser):
         if not self.environment.parsed_options.prompt_randomize:
             return self.prompt
         # single letters are single tokens
-        new_prompt = self.prompt.replace("Oops!", " ".join(chr(ord("a") + random.randint(0, 25)) for _ in range(prompt_random_tokens)) + "Oops!")
+        tag = "Oops!"
+        tag = "*eyes widen, lips curl into a mischievous grin*"
+        tag = "Are you the b*tch"
+        tag = "Hey sis, ready for another round?"  # llama3
+        new_prompt = self.prompt.replace(tag, " ".join(chr(ord("a") + random.randint(0, 25)) for _ in range(prompt_random_tokens)) + tag)
         return new_prompt
         # return (
         #     " ".join(
@@ -701,20 +744,31 @@ class LLMUser(HttpUser):
                     dur_chunks.append(now - t_prev)
                     t_prev = now
                     if self.stream:
-                        assert chunk.startswith(
-                            b"data:"
-                        ), f"Unexpected chunk not starting with 'data': {chunk}"
-                        chunk = chunk[len(b"data:") :]
-                        if chunk.strip() == b"[DONE]":
-                            done = True
-                            continue
+                        if self.provider == 'maas':
+                            chunk = chunk
+                            chunk = remove_prefix(chunk.decode("utf-8"), "data: ")
+                            data = orjson.loads(chunk)
+                            if "usage" in data["resp_data"]:
+                                done = True
+                                continue
+                        else:
+                            assert chunk.startswith(
+                                b"data:"
+                            ), f"Unexpected chunk not starting with 'data': {chunk}"
+                            chunk = chunk[len(b"data:") :]
+                            if chunk.strip() == b"[DONE]":
+                                done = True
+                                continue
                     data = orjson.loads(chunk)
                     # print(f"Received chunk: {data}")
                     out = self.provider_formatter.parse_output_json(data, prompt)
                     if out.usage_tokens:
-                        total_usage_tokens = (
-                            total_usage_tokens or 0
-                        ) + out.usage_tokens
+                        if self.stream:
+                            total_usage_tokens = out.usage_tokens
+                        else:
+                            total_usage_tokens = (
+                                total_usage_tokens or 0
+                            ) + out.usage_tokens
                     if out.prompt_usage_tokens:
                         prompt_usage_tokens = out.prompt_usage_tokens
                     if out.text and t_first_token is None:
@@ -890,6 +944,11 @@ def init_parser(parser):
         "-k",
         "--api-key",
         env_var="API_KEY",
+        help="Auth for the API",
+    )
+    parser.add_argument(
+        "--api-secret",
+        env_var="API_SECRET",
         help="Auth for the API",
     )
     parser.add_argument(
