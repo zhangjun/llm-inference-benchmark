@@ -32,4 +32,5 @@ api_key='2322572d2fe03bca7eb32d6dbe4e473c'        # 这里需要替换你的APIK
 api_secret='6abbcfa48c8b0528bf7a2b19081f087f624ff1f1af639b00'  # 这里需要替换你的APISecret
 model_name='8b_as_en_llama31_mem_v3_0801'
 model_name='llama3_as_en_v3_0807_q'
-locust --prompt-randomize --prompt-text "@llama3_prompt.txt" --qps 9 -u 1000 -r 1000 -t 60s --provider maas -H https://api-maas.singularity-ai.com/ -p 1450 -o 512 --model ${model_name} --api-key ${api_key} --api-secret ${api_secret} --no-chat --stream --show-response
+model_name='llama3_as_en_12b_mistral_v2_0929_w'
+locust --prompt-randomize --prompt-text "@mistral_nemo_12b.txt" --qps 3.5 -u 1000 -r 1000 -t 60s --provider maas -H https://api-maas.singularity-ai.com/ -p 1450 -o 40 --model ${model_name} --api-key ${api_key} --api-secret ${api_secret} --no-chat --stream --show-response

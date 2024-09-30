@@ -334,6 +334,17 @@ class MassProvider(OpenAIProvider):
     #         data = data["resp_data"]
     #     return super().parse_output_json(data, prompt)
 
+    def format_payload(self, prompt, max_tokens):
+        data = super().format_payload(prompt, max_tokens)
+        data["stop"] = "<|end_of_turn_token|>"
+        data["param"] = {
+            "generate_length":max_tokens,
+            "temperature": self.parsed_options.temperature,
+            # "endwords": ["<|END_OF_TURN_TOKEN|>"],
+            "endwords": ["<|eot_id|>","<|end_of_text|>","</s>"],
+        }
+        return data
+
     def parse_output_json(self, data, prompt):
         resp_data = data["resp_data"]
         usage = resp_data["usage"] if "usage" in resp_data else None
@@ -696,6 +707,8 @@ class LLMUser(HttpUser):
         tag = "*eyes widen, lips curl into a mischievous grin*"
         tag = "Are you the b*tch"
         tag = "Hey sis, ready for another round?"  # llama3
+        tag = "*she grins* oh, hey there! what's the matter? didn't expect me to make a move?" # yi34b
+        tag = 'elven queen elysia'
         new_prompt = self.prompt.replace(tag, " ".join(chr(ord("a") + random.randint(0, 25)) for _ in range(prompt_random_tokens)) + tag)
         return new_prompt
         # return (
